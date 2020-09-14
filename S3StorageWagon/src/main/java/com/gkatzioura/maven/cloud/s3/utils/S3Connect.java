@@ -51,19 +51,15 @@ public class S3Connect {
     }
 
     public void setCredentials(String accessKeyId, String secretKey) {
-        setCredentialsProvider(new BasicAWSCredentials(accessKeyId, secretKey));
+        setCredentials(new BasicAWSCredentials(accessKeyId, secretKey));
     }
 
-    public void setCredentialsProfile(String profile) {
-        setCredentialsProvider(new ProfileCredentialsProvider(profile));
-    }
-
-    public void setCredentialsProvider(BasicAWSCredentials credentials) {
+    public void setCredentials(BasicAWSCredentials credentials) {
         credentialsProvider = new AWSStaticCredentialsProvider(credentials);
     }
 
-    public void setCredentialsProvider(ProfileCredentialsProvider profileCredentialsProvider) {
-        credentialsProvider = profileCredentialsProvider;
+    public void setCredentialsProfile(String profile) {
+        credentialsProvider = new ProfileCredentialsProvider(profile);
     }
 
     public void setPathStyleEnabled(PathStyleEnabledProperty pathStyle) {

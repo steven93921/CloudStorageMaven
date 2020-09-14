@@ -33,6 +33,7 @@ import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
 import org.apache.maven.wagon.authentication.AuthenticationException;
 
+import com.amazonaws.auth.BasicAWSCredentials;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.S3ClientOptions;
@@ -59,6 +60,16 @@ public class S3DownloadMojo extends AbstractMojo {
     @Parameter(property = "s3-download.region")
     private String region;
 
+    @Parameter(property = "s3-download.stripPrefix")
+    private boolean stripPrefix;
+
+    @Parameter(property = "s3-download.profile")
+    private String profile;
+
+    @Parameter(property = "s3-download.credentials")
+    private BasicAWSCredentials credentials;
+
+
     private static final String DIRECTORY_CONTENT_TYPE = "application/x-directory";
 
     private static final Logger LOGGER = Logger.getLogger(S3DownloadMojo.class.getName());
@@ -78,9 +89,13 @@ public class S3DownloadMojo extends AbstractMojo {
         AmazonS3 amazonS3;
 
         try {
-            //Sending the authenticationInfo as null will make this use the default S3 authentication, which will only
-            //look at the environment Java properties or environment variables
-            amazonS3 = S3Connect.connect(null, region, EndpointProperty.empty(), new PathStyleEnabledProperty(String.valueOf(S3ClientOptions.DEFAULT_PATH_STYLE_ACCESS)));
+            S3Connect s3Connect = new S3Connect(region);
+            if (credentials != null) {
+                s3Connect.setCredentials(credentials);
+            } else if (profile != null) {
+                s3Connect.setCredentialsProfile(profile);
+            }
+            amazonS3 = s3Connect.connect();
         } catch (AuthenticationException e) {
             throw new MojoExecutionException(
                     String.format("Unable to authenticate to S3 with the available credentials. Make sure to either define the environment variables or System properties defined in https://docs.aws.amazon.com/AWSJavaSDK/latest/javadoc/com/amazonaws/auth/DefaultAWSCredentialsProviderChain.html.%n" +
@@ -89,44 +104,33 @@ public class S3DownloadMojo extends AbstractMojo {
         }
 
         if (keys.size()==1) {
-            downloadSingleFile(amazonS3,keys.get(0));
-            return;
-        }
+            String key = keys.get(0);
+            if (key.endsWith("/") || stripPrefix) {
+                // Skip Prefix should always use '/' for all directory type prefixes ?
+                downloadPrefix(amazonS3, key);
+            } else {
+                downloadFile(amazonS3, key, downloadPath);
+            }
+        } else {
+            for (String key : keys) {
+                downloadPrefix(amazonS3, key);
+            }
+       }
+    }
 
-        List<Iterator<String>> prefixKeysIterators = keys.stream()
-                                                 .map(pi -> new PrefixKeysIterator(amazonS3, bucket, pi))
-                                                 .collect(Collectors.toList());
-        Iterator<String> keyIteratorConcated = new KeyIteratorConcated(prefixKeysIterators);
-
-        while (keyIteratorConcated.hasNext()) {
-
-            String key = keyIteratorConcated.next();
-            downloadFile(amazonS3,key);
+    private void downloadPrefix(AmazonS3 amazonS3, String prefix) {
+        Iterator<String> keyIterator = new PrefixKeysIterator(amazonS3, bucket, prefix);
+        while (keyIterator.hasNext()) {
+            String key = keyIterator.next();
+            String target = stripPrefix ?
+                                downloadPath + "/" + key.substring(prefix.length()) :
+                                downloadPath + "/" + key;
+            downloadFile(amazonS3, key, target);
         }
     }
 
-    private void downloadSingleFile(AmazonS3 amazonS3,String key) {
-        File file = new File(downloadPath);
-
-        if(file.getParentFile()!=null) {
-            file.getParentFile().mkdirs();
-        }
-
-        S3Object s3Object = amazonS3.getObject(bucket, key);
-
-        try(S3ObjectInputStream s3ObjectInputStream = s3Object.getObjectContent();
-            FileOutputStream fileOutputStream = new FileOutputStream(file)
-        ) {
-            IOUtils.copy(s3ObjectInputStream,fileOutputStream);
-        } catch (IOException e) {
-            LOGGER.log(Level.SEVERE, "Could not download s3 file");
-            e.printStackTrace();
-        }
-    }
-
-    private void downloadFile(AmazonS3 amazonS3,String key) {
-
-        File file = new File(createFullFilePath(key));
+    private void downloadFile(AmazonS3 amazonS3, String key, String target) {
+        File file = new File(target);
 
         if(file.getParent()!=null) {
             file.getParentFile().mkdirs();
@@ -146,12 +150,6 @@ public class S3DownloadMojo extends AbstractMojo {
             LOGGER.log(Level.SEVERE, "Could not download s3 file");
             e.printStackTrace();
         }
-    }
-
-    private final String createFullFilePath(String key) {
-
-        String fullPath = downloadPath+"/"+key;
-        return fullPath;
     }
 
     private final boolean isDirectory(S3Object s3Object) {
